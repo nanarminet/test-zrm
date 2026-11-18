@@ -85,6 +85,33 @@ en `.streamlit/secrets.toml` et y mettre la clé.
 Attention : une application publique est accessible à toute personne qui a le lien et **chaque visite consomme
 votre quota d'API**. Les images du livret ZRM y sont visibles (voir « Droits des images »).
 
+## Utiliser Gemini (palier gratuit de Google AI Studio)
+
+1. Créer une clé sur Google AI Studio (aistudio.google.com).
+2. Dans les Secrets Streamlit (ou le `secrets.toml` / l'environnement) : **supprimer** `OLLAMA_API_KEY` (clé périmée) et
+   ajouter `GEMINI_API_KEY = "votre_clé"`. Si les deux restent, l'application refuse de choisir : ajouter
+   `LLM_PROVIDER = "gemini"`.
+3. Redémarrer l'application. Rien d'autre à changer dans le code : `llm.py` contient le préréglage `gemini`
+   (couche de compatibilité OpenAI de Google : `https://generativelanguage.googleapis.com/v1beta/openai/`,
+   modèle `gemini-2.5-flash`, `reasoning_effort="none"` pour ne pas consommer `max_tokens` en réflexion).
+
+Précisions :
+- **Confidentialité** : sur le palier gratuit, Google indique utiliser les contenus envoyés pour améliorer ses produits
+  (le palier payant, non). Les testeurs ne doivent donc saisir **aucune donnée personnelle réelle**. L'image choisie est
+  envoyée à Gemini comme aux autres fournisseurs (choix du projet), ce qui l'expose à cette réutilisation par Google :
+  voir « Droits des images » plus bas ; `LLM_ENVOYER_IMAGE=non` la retire. Pour Gemini, l'image est transmise sous la
+  forme `{"url": "data:image/jpeg;base64,..."}`, celle de la documentation Google (Ollama et Mistral : chaîne).
+- **Quotas** : limites par projet Google (requêtes/minute, jetons/minute, requêtes/jour), pas par clé ; les valeurs
+  actuelles sont sur aistudio.google.com/rate-limit. Au-delà : erreur 429, l'application réessaie 3 fois puis affiche le
+  message de suspension avec « Réessayer ». Les quotas quotidiens se réinitialisent à minuit, heure du Pacifique.
+- **Format de réponse** : la doc Google ne détaille pas le support de `json_schema`/`json_object` dans la couche OpenAI.
+  `llm.py` essaie `json_schema`, puis `json_object`, puis aucun format imposé (le code extrait et valide le JSON, avec une
+  relance corrective) : la qualité réelle du JSON est à observer aux premiers essais (journaux `zrm.ia`).
+- **Autre modèle** : `LLM_MODEL` (ex. `gemini-3.5-flash`). L'effort de raisonnement par défaut (`none`) ne s'applique
+  qu'au modèle par défaut ; Google indique que la réflexion ne peut pas être coupée sur les modèles 3 : utiliser alors
+  `LLM_REASONING_EFFORT=low` et, si les réponses sont tronquées, relever les `max_tokens` dans `activites.py`.
+- **Production** : le projet impose Mistral ; Gemini sert ici de relais de test.
+
 ## Passer de Ollama à Mistral
 
 Il suffit de **remplacer la variable de la clé** :

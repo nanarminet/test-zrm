@@ -1,7 +1,7 @@
 """POC « Parcours ZRM » (Le Vinatier) : simulation du parcours aidant·e avec les activités IA.
 
 Lancement :  cd poc_activites_ia  puis  streamlit run app.py
-Clé API    :  variable d'environnement OLLAMA_API_KEY (test) ou MISTRAL_API_KEY (production),
+Clé API    :  variable d'environnement GEMINI_API_KEY ou OLLAMA_API_KEY (test), MISTRAL_API_KEY (production),
               ou .streamlit/secrets.toml / « Secrets » de Streamlit Cloud (voir le README).
 
 Ce fichier ne fait que la configuration ; le parcours est dans parcours.py, les textes fixes dans

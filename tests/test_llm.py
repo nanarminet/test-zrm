@@ -151,10 +151,28 @@ def test_repli_json_object_si_schema_refuse(reseau):
     assert [a["json"]["response_format"]["type"] for a in reseau.appels] == ["json_schema", "json_object"]
 
 
-def test_refus_des_deux_formats(reseau):
-    reseau.reponses = [FauxRetour(422, texte="no"), FauxRetour(422, texte="no")]
+def test_repli_sans_format_impose_si_schema_et_json_object_refuses(reseau):
+    reseau.reponses = [FauxRetour(400, texte="no"), FauxRetour(400, texte="no"), ok('Voici : {"a": 3}')]
+    r = llm.appeler(CONF, nom="t", messages=MSG, schema=SCHEMA)
+    assert r.donnees == {"a": 3} and r.format_utilise == "aucun"
+    formats = [a["json"].get("response_format", {}).get("type") for a in reseau.appels]
+    assert formats == ["json_schema", "json_object", None]
+
+
+def test_refus_des_trois_formats(reseau):
+    reseau.reponses = [FauxRetour(422, texte="no")] * 3
     with pytest.raises(llm.LLMSortieInvalide, match="refusée"):
         llm.appeler(CONF, nom="t", messages=MSG, schema=SCHEMA)
+
+
+@pytest.mark.parametrize("texte", [
+    '{"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}}',
+    '[{"error": {"details": [{"reason": "API_KEY_INVALID"}]}}]'])
+def test_cle_invalide_renvoyee_en_400_est_traitee_comme_une_cle_refusee(reseau, texte):
+    reseau.reponses = [FauxRetour(400, texte=texte)]
+    with pytest.raises(llm.LLMIndisponible, match="clé API refusée"):
+        llm.appeler(CONF, nom="t", messages=MSG, schema=SCHEMA)
+    assert len(reseau.appels) == 1
 
 
 @pytest.mark.parametrize("code", [401, 403])
@@ -220,3 +238,60 @@ def test_envoi_de_l_image_actif_par_defaut_et_desactivable():
     assert llm.resoudre_config(base.get).envoyer_image is True
     for valeur in ("non", "false", "0", "No"):
         assert llm.resoudre_config({**base, "LLM_ENVOYER_IMAGE": valeur}.get).envoyer_image is False
+
+
+# ------------------------------------------------------------------ Gemini
+def test_cle_gemini_seule():
+    c = llm.resoudre_config(env(GEMINI_API_KEY="g"))
+    assert (c.fournisseur, c.modele, c.cle) == ("gemini", "gemini-2.5-flash", "g")
+    assert c.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert c.effort_raisonnement == "none"            # coupe la réflexion : elle consommerait max_tokens
+    assert c.envoyer_image is True and c.image_objet is True      # image envoyée, au format objet de Google
+
+
+def test_gemini_image_desactivable():
+    assert llm.resoudre_config(env(GEMINI_API_KEY="g", LLM_ENVOYER_IMAGE="non")).envoyer_image is False
+
+
+def test_image_en_objet_pour_gemini_et_en_chaine_pour_les_autres(reseau):
+    msgs = [{"role": "system", "content": "S"}, llm.message_utilisateur("voir", b"\xff\xd8abc")]
+    reseau.reponses = [ok('{"a": 1}'), ok('{"a": 1}')]
+    llm.appeler(llm.resoudre_config(env(GEMINI_API_KEY="g")), nom="t", messages=msgs, schema=SCHEMA)
+    img = reseau.appels[0]["json"]["messages"][1]["content"][1]["image_url"]
+    assert isinstance(img, dict) and img["url"].startswith("data:image/jpeg;base64,")
+    assert isinstance(msgs[1]["content"][1]["image_url"], str)               # message d'origine non modifié
+    llm.appeler(CONF, nom="t", messages=msgs, schema=SCHEMA)
+    assert isinstance(reseau.appels[1]["json"]["messages"][1]["content"][1]["image_url"], str)
+
+
+def test_gemini_autre_modele_n_herite_pas_de_l_effort_par_defaut():
+    c = llm.resoudre_config(env(GEMINI_API_KEY="g", LLM_MODEL="gemini-3.5-flash"))
+    assert c.modele == "gemini-3.5-flash" and c.effort_raisonnement == ""
+    c = llm.resoudre_config(env(GEMINI_API_KEY="g", LLM_MODEL="gemini-3.5-flash", LLM_REASONING_EFFORT="low"))
+    assert c.effort_raisonnement == "low"
+
+
+def test_effort_explicite_remplace_celui_du_preset():
+    assert llm.resoudre_config(env(GEMINI_API_KEY="g", LLM_REASONING_EFFORT="low")).effort_raisonnement == "low"
+
+
+def test_ollama_et_mistral_gardent_l_image_et_pas_d_effort():
+    for cle in ("OLLAMA_API_KEY", "MISTRAL_API_KEY"):
+        c = llm.resoudre_config(env(**{cle: "k"}))
+        assert c.envoyer_image is True and c.effort_raisonnement == ""
+
+
+def test_cle_ollama_perimee_plus_cle_gemini_demande_le_fournisseur():
+    with pytest.raises(llm.ConfigurationError, match="LLM_PROVIDER"):
+        llm.resoudre_config(env(OLLAMA_API_KEY="vieille", GEMINI_API_KEY="g"))
+    assert llm.resoudre_config(env(OLLAMA_API_KEY="vieille", GEMINI_API_KEY="g", LLM_PROVIDER="gemini")).fournisseur == "gemini"
+
+
+def test_gemini_requete_sur_l_url_openai_compatible_avec_effort_none(reseau):
+    conf = llm.resoudre_config(env(GEMINI_API_KEY="g"))
+    reseau.reponses = [ok('{"a": 1}')]
+    llm.appeler(conf, nom="t", messages=MSG, schema=SCHEMA)
+    appel = reseau.appels[0]
+    assert appel["url"] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert appel["headers"]["Authorization"] == "Bearer g"
+    assert appel["json"]["model"] == "gemini-2.5-flash" and appel["json"]["reasoning_effort"] == "none"
